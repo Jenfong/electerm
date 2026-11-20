@@ -1,4 +1,5 @@
 const { ipcMain, webContents } = require('electron')
+const { usesPrivateClipboard } = require('./clipboard')
 
 // Credentials belong to the origin the prompt was raised for, not to the guest
 // tab: a webContents id stays the same across navigations and across
@@ -78,6 +79,19 @@ const GUEST_DENIED_PERMISSIONS = new Set([
   'idle-detection', 'clipboard-read'
 ])
 
+function applyPermissions (session) {
+  const isAllowed = (wc, permission) => {
+    if (usesPrivateClipboard() && permission.startsWith('clipboard-')) {
+      return false
+    }
+    return !(isGuestWebContents(wc) && GUEST_DENIED_PERMISSIONS.has(permission))
+  }
+  session.setPermissionRequestHandler?.((wc, permission, callback) => {
+    callback(isAllowed(wc, permission))
+  })
+  session.setPermissionCheckHandler?.(isAllowed)
+}
+
 function hardenWebview (event, webPreferences, params) {
   // a guest page never gets a preload, node, or the ability to nest webviews
   delete webPreferences.preload
@@ -99,6 +113,9 @@ function hardenWebview (event, webPreferences, params) {
 
 function init (mainWindow) {
   windowCount++
+  if (usesPrivateClipboard()) {
+    applyPermissions(mainWindow.webContents.session)
+  }
 
   // Listen for auth response from renderer if not already listening
   if (ipcMain.listenerCount('webview-auth-response') === 0) {
@@ -162,26 +179,9 @@ function setupWebview (viewWebContents, mainWindow) {
   if (!initializedSessions.has(session)) {
     initializedSessions.add(session)
 
-    // A web session has no business asking for devices; notifications,
-    // fullscreen and clipboard write stay available for ordinary web apps.
-    // The handler sits on the shared default session, so anything that is not a
-    // guest keeps the previous (no handler) behaviour.
-    session.setPermissionRequestHandler?.((wc, permission, callback) => {
-      const granted = !isGuestWebContents(wc) ||
-        !GUEST_DENIED_PERMISSIONS.has(permission)
-      callback(granted)
-    })
-
-    // Permission checks and permission requests are separate Chromium paths.
-    // Without a check handler Electron grants every check by default (see
-    // ElectronPermissionManager::CheckPermissionWithDetails), so the denial
-    // list above would only cover APIs that also issue a request. Mirror it.
-    // webContents can be null for checks not tied to a document (service
-    // workers, notifications); leave those at the previous default.
-    session.setPermissionCheckHandler?.((wc, permission) => {
-      return !(isGuestWebContents(wc) &&
-        GUEST_DENIED_PERMISSIONS.has(permission))
-    })
+    // Electron checks some permissions without issuing a request.
+    // Apply the same rules on any session used by an embedded page.
+    applyPermissions(session)
 
     // This listener sits on the shared default session, so without a filter it
     // runs for every request the app makes. Limit it to http(s), and never let

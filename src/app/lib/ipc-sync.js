@@ -2,10 +2,8 @@
  * ipc main
  */
 
-const {
-  shell,
-  clipboard
-} = require('electron')
+const { shell } = require('electron')
+const clipboard = require('./clipboard')
 const log = require('../common/log')
 const constants = require('../common/runtime-constants')
 const globalState = require('./glob-state')
@@ -52,12 +50,8 @@ module.exports = {
   // stored), so a renderer that just loaded can rebuild it without waiting for
   // a widget to re-apply (client/common/widget-style-host.js).
   getWidgetStyles: () => widgetLoader.runningCss(),
-  readClipboard: () => {
-    return clipboard.readText()
-  },
-  writeClipboard: str => {
-    clipboard.writeText(str)
-  },
+  readClipboard: clipboard.readText,
+  writeClipboard: clipboard.writeText,
   resolve: (...args) => require('path').resolve(...args),
   join: (...args) => require('path').join(...args),
   basename: (...args) => require('path').basename(...args),

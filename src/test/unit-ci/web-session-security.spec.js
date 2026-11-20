@@ -24,6 +24,7 @@ const Module = require('module')
 
 const srcRoot = path.join(__dirname, '../../../src')
 
+let appName = 'electerm'
 let ipcHandler = null
 let lastAuthRequest = null
 
@@ -39,6 +40,7 @@ const originalLoad = Module._load.bind(Module)
 Module._load = function (request, parent, isMain) {
   if (request === 'electron') {
     return {
+      app: { getName: () => appName },
       ipcMain: mockIpcMain,
       webContents: { fromId () { return null } }
     }
@@ -90,6 +92,7 @@ function createSession () {
 function createWindow () {
   const win = new EventEmitter()
   win.webContents = new EventEmitter()
+  win.webContents.session = createSession()
   win.webContents.send = (channel, data) => {
     if (channel === 'webview-auth-request') lastAuthRequest = data
   }
@@ -200,6 +203,28 @@ describe('web session guest hardening', () => {
     }
     assert.equal(ask({ getType: () => 'window' }, 'media'), true)
     assert.equal(ask(null, 'media'), true)
+  })
+
+  test('Background denies browser clipboard access before and after attaching a webview', () => {
+    appName = 'electerm-background'
+    const win = createWindow()
+    try {
+      webviewHandler.init(win)
+      const guest = createGuest()
+      attachWebview(win, guest, {}, { src: 'https://example.com/' })
+      for (const [session, wc] of [[win.webContents.session, win.webContents], [guest.session, guest]]) {
+        for (const permission of ['clipboard-read', 'clipboard-sanitized-write']) {
+          for (const owner of [wc, null]) {
+            assert.equal(session.checkHandler(owner, permission), false)
+            session.permissionHandler(owner, permission, allowed => assert.equal(allowed, false))
+          }
+        }
+        assert.equal(session.checkHandler(wc, 'fullscreen'), true)
+      }
+    } finally {
+      appName = 'electerm'
+      win.emit('closed')
+    }
   })
 
   test('guest permission checks are denied too, not just permission requests', () => {
