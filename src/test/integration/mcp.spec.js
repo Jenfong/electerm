@@ -3,8 +3,8 @@
  *
  * Prerequisites:
  *   - electerm dev app running (npm start + npm run app)
- *   - MCP Server widget started on http://127.0.0.1:30837/mcp, default config
- *     (bookmarks/groups/sftp read enabled, tasks extension enabled). The
+ *   - MCP Server widget started on http://127.0.0.1:30837/mcp with
+ *     allowInteractiveTools enabled (the suite manipulates test tabs). The
  *     transfer tests additionally need `enableSftpWrite` on — it is opt-in
  *     since GHSA-vw4q-c6px-w5p3; without it the write tools are not registered
  *     and those cases degrade to no-ops via tolerant().

@@ -295,7 +295,7 @@ describe('MCP Tasks extension – protocol', () => {
   let instance = null
 
   before(async () => {
-    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY })
+    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY, allowInteractiveTools: true })
     await instance.start()
   })
 
@@ -529,7 +529,7 @@ describe('MCP Tasks extension – disabled via config', () => {
   let instance = null
 
   before(async () => {
-    instance = widgetRun({ host: '127.0.0.1', port: PORT, enableTasks: false, apiKey: TEST_API_KEY })
+    instance = widgetRun({ host: '127.0.0.1', port: PORT, enableTasks: false, apiKey: TEST_API_KEY, allowInteractiveTools: true })
     await instance.start()
   })
 

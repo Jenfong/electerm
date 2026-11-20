@@ -56,13 +56,17 @@ export function getRDCleanPathDetails (err) {
  * @param {{http?: number, wsa?: number, tls?: number} | null} d
  * @param {string} host
  * @param {number} port
+ * @param {boolean} macDesktop the RDP proxy runs in the macOS desktop app
  * @return {string} empty: nothing known, show the raw error
  */
-export function rdCleanPathText (d, host, port) {
+export function rdCleanPathText (d, host, port, macDesktop = false) {
   if (!d) {
     return ''
   }
   const addr = `${host}:${port}`
+  const localNetworkHint = macDesktop
+    ? '. For a LAN host, allow electerm in System Settings > Privacy & Security > Local Network, then retry.'
+    : ''
   switch (d.wsa) {
     case 10060:
       return `${addr} does not answer (connection timed out): the computer is off or asleep, or a firewall blocks remote desktop`
@@ -71,14 +75,14 @@ export function rdCleanPathText (d, host, port) {
     case 10064:
     case 10065:
     case 10051:
-      return `${addr} cannot be reached (no route to host / network unreachable)`
+      return `${addr} cannot be reached (no route to host / network unreachable)` + localNetworkHint
     case 11001:
     case 11002:
       return `${host}: host name not found`
     case 10054:
       return `${addr} reset the connection`
     case 10013:
-      return `${addr}: connection not permitted (blocked locally)`
+      return `${addr}: connection not permitted (blocked locally)` + localNetworkHint
   }
   if (d.tls) {
     return `TLS handshake with ${addr} failed (TLS alert ${d.tls})`

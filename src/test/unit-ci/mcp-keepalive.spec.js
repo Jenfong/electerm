@@ -132,7 +132,7 @@ describe('set_electerm_terminal_keepalive – tool surface & wiring', () => {
   let instance = null
 
   before(async () => {
-    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY })
+    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY, allowInteractiveTools: true })
     await instance.start()
   })
 

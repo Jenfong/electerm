@@ -127,6 +127,15 @@ describe('rdp connect errors', () => {
     assert.equal(t(null), '')
   })
 
+  test('macOS route and permission errors give the local network settings path', () => {
+    for (const wsa of [10013, 10051, 10064, 10065]) {
+      const details = { http: 502, wsa }
+      assert.match(rdCleanPathText(details, 'rdp-host', 3389, true), /Privacy & Security.*Local Network/)
+      assert.doesNotMatch(rdCleanPathText(details, 'rdp-host', 3389), /Local Network/)
+    }
+    assert.doesNotMatch(rdCleanPathText({ wsa: 10061 }, 'rdp-host', 3389, true), /Local Network/)
+  })
+
   test('details from an IronError', () => {
     const ironErr = (kind, d) => ({
       kind: () => kind,

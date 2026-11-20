@@ -128,6 +128,7 @@ describe('get_electerm_command_rules – blacklist mode', () => {
       host: '127.0.0.1',
       port: PORT,
       apiKey: TEST_API_KEY,
+      allowInteractiveTools: true,
       commandBlacklist: RAW_BLACKLIST,
       commandWhitelist: ''
     })
@@ -210,6 +211,7 @@ describe('get_electerm_command_rules – whitelist mode', () => {
       host: '127.0.0.1',
       port: PORT,
       apiKey: TEST_API_KEY,
+      allowInteractiveTools: true,
       commandWhitelist: '^ls\n ^cat '
     })
     await instance.start()

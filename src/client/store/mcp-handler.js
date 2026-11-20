@@ -1088,8 +1088,8 @@ export default Store => {
 
   Store.prototype.mcpExecuteCommand = async function (args) {
     const { store } = window
-    const { command } = args
-    const tabId = args.tabId || store.activeTabId
+    const { command, backgroundOnly } = args
+    const tabId = backgroundOnly ? args.tabId : args.tabId || store.activeTabId
     const timeoutMs = Math.min(Math.max(args.timeoutMs || 120000, 1000), 600000)
     const maxOutputBytes = args.maxOutputBytes || 204800
     // 'exec' (default): SSH exec channel with sentinel-PTY fallback.
@@ -1098,7 +1098,7 @@ export default Store => {
     const requestedMode = args.mode === 'pty' ? 'pty' : 'exec'
 
     if (!tabId) {
-      throw new Error('No active terminal')
+      throw new Error(backgroundOnly ? 'An explicit SSH tab ID is required' : 'No active terminal')
     }
     if (!command) {
       throw new Error('No command provided')
@@ -1110,45 +1110,35 @@ export default Store => {
     }
 
     const isSsh = tab.type === 'ssh' || (!tab.type && !!tab.host)
+    if (backgroundOnly && (!isSsh || requestedMode !== 'exec')) {
+      throw new Error('Background mode requires an SSH exec channel')
+    }
+
     const start = Date.now()
-    let result = null
+    let result
     let mode = 'pty'
 
-    setTabMcpStatus(tabId, 'running')
+    if (!backgroundOnly) setTabMcpStatus(tabId, 'running')
     try {
       if (requestedMode === 'exec' && isSsh) {
-        try {
-          const r = await execCmd(tabId, command, timeoutMs)
-          result = {
-            stdout: r.stdout || '',
-            stderr: r.stderr || '',
-            stderrMerged: false,
-            exitCode: typeof r.exitCode === 'number' ? r.exitCode : null,
-            durationMs: Date.now() - start,
-            timedOut: !!r.timedOut
-          }
-          mode = 'exec'
-        } catch (e) {
-          // Only session types that genuinely lack an exec channel
-          // (local/telnet/serial/...) fall back to PTY sentinel capture.
-          // An SSH tab always has exec support, so any exec failure there
-          // means the connection is dead — surface it immediately as
-          // [error] instead of polling a dead terminal for the full
-          // timeout and misreporting timedOut.
-          if (isSsh || !/not supported/i.test(e.message || '')) {
-            throw e
-          }
+        const r = await execCmd(tabId, command, timeoutMs)
+        result = {
+          stdout: r.stdout || '',
+          stderr: r.stderr || '',
+          stderrMerged: false,
+          exitCode: typeof r.exitCode === 'number' ? r.exitCode : null,
+          durationMs: Date.now() - start,
+          timedOut: !!r.timedOut
         }
-      }
-
-      if (!result) {
+        mode = 'exec'
+      } else {
         result = await store.mcpExecuteCommandPty({ command, tabId, timeoutMs })
       }
     } catch (err) {
-      setTabMcpStatusAuto(tabId, 'error')
+      if (!backgroundOnly) setTabMcpStatusAuto(tabId, 'error')
       throw err
     }
-    setTabMcpStatusAuto(tabId, result.timedOut ? 'running' : 'done')
+    if (!backgroundOnly) setTabMcpStatusAuto(tabId, result.timedOut ? 'running' : 'done')
 
     const out = truncateTail(result.stdout, maxOutputBytes)
     const err = truncateTail(result.stderr, maxOutputBytes)

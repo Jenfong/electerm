@@ -251,6 +251,83 @@ async function callTool (port, sid, toolName, args) {
   }, sid)
 }
 
+describe('MCP background mode', () => {
+  const port = 30868
+  let instance
+
+  before(async () => {
+    // Old widget configs do not contain the interactive opt-in.
+    instance = widgetRun({
+      host: '127.0.0.1',
+      port,
+      apiKey: TEST_API_KEY,
+      enableSftpWrite: true
+    })
+    await instance.start()
+  })
+
+  after(async () => {
+    if (instance) await instance.stop()
+  })
+
+  test('only exposes read operations and background SSH execution', async () => {
+    const sid = await initSession(port)
+    const response = await mcpPost(port, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, sid)
+    assert.deepEqual(response.data.result.tools.map(tool => tool.name).sort(), [
+      'electerm_sftp_list',
+      'electerm_sftp_read_file',
+      'electerm_sftp_stat',
+      'electerm_sftp_transfer_history',
+      'electerm_sftp_transfer_list',
+      'execute_electerm_command',
+      'get_electerm_active_tab',
+      'get_electerm_bookmark',
+      'get_electerm_command_rules',
+      'get_electerm_terminal_output',
+      'get_electerm_terminal_selection',
+      'get_electerm_terminal_status',
+      'list_electerm_bookmark_groups',
+      'list_electerm_bookmarks',
+      'list_electerm_tabs'
+    ])
+  })
+
+  test('blocks tab changes, implicit targets, PTY and async jobs before renderer IPC', async () => {
+    const sid = await initSession(port)
+    const originalSend = mockWin.webContents.send
+    const calls = []
+    mockWin.webContents.send = (...args) => {
+      calls.push(args[1])
+      originalSend(...args)
+    }
+    try {
+      const switchTab = await callTool(port, sid, 'switch_electerm_tab', { tabId: 'ssh-1' })
+      assert.ok(switchTab.data.error || switchTab.data.result?.isError)
+      for (const args of [
+        {},
+        { tabId: '  ' },
+        { tabId: 'ssh-1', mode: 'pty' },
+        { tabId: 'ssh-1', wait: false }
+      ]) {
+        const response = await callTool(port, sid, 'execute_electerm_command', { command: 'echo ok', ...args })
+        assert.ok(response.data.error || response.data.result?.isError)
+      }
+      assert.deepEqual(calls, [])
+
+      const response = await callTool(port, sid, 'execute_electerm_command', {
+        command: 'echo ok',
+        tabId: 'ssh-1'
+      })
+      assert.ok(!response.data.result.isError)
+      assert.equal(calls.length, 1)
+      assert.equal(calls[0].data.args.tabId, 'ssh-1')
+      assert.equal(calls[0].data.args.backgroundOnly, true)
+    } finally {
+      mockWin.webContents.send = originalSend
+    }
+  })
+})
+
 describe('execute_electerm_command – widget config & wiring', () => {
   const PORT = 30852
   let instance = null
@@ -260,7 +337,8 @@ describe('execute_electerm_command – widget config & wiring', () => {
       host: '127.0.0.1',
       port: PORT,
       apiKey: TEST_API_KEY,
-      commandBlacklist: '^forbidden-exec'
+      commandBlacklist: '^forbidden-exec',
+      allowInteractiveTools: true
     })
     await instance.start()
   })
@@ -349,7 +427,7 @@ describe('execute_electerm_command – mode param & legacy tool removal', () => 
   let instance = null
 
   before(async () => {
-    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY })
+    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY, allowInteractiveTools: true })
     await instance.start()
   })
 
@@ -448,7 +526,7 @@ describe('MCP server – Host/Origin guard and API key', () => {
   let serverInfo = null
 
   before(async () => {
-    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY })
+    instance = widgetRun({ host: '127.0.0.1', port: PORT, apiKey: TEST_API_KEY, allowInteractiveTools: true })
     const res = await instance.start()
     serverInfo = res.serverInfo
   })

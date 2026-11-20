@@ -90,6 +90,9 @@
     "allowToChangeInstallationDirectory": true
   },
   "mac": {
+    "extendInfo": {
+      "NSLocalNetworkUsageDescription": "electerm connects to devices on your local network using protocols such as RDP, SSH and VNC."
+    },
     "category": "public.app-category.developer-tools",
     "target": "dmg",
     "icon": "node_modules/@electerm/electerm-resource/build/icons.icns",

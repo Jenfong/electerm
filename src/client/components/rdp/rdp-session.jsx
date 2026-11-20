@@ -403,7 +403,7 @@ export default class RdpSession extends PureComponent {
       return window.translate('loginFail') + ` (${this.formatError(err)})`
     }
     const { host, port = 3389 } = this.props.tab || {}
-    return rdCleanPathText(getRDCleanPathDetails(err), host, port) ||
+    return rdCleanPathText(getRDCleanPathDetails(err), host, port, isMac) ||
       negotiationText(err, this.nla !== false) ||
       this.formatError(err)
   }

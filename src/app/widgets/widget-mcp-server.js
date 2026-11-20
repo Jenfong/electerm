@@ -67,6 +67,27 @@ function sanitizeTabArgs (args) {
   return stripTabInternalProps(stripDangerousTabProps({ ...(args || {}) }))
 }
 
+// In background mode, every newly added tool requires explicit review here
+// before it can be called without permission to control the user's workspace.
+const backgroundTools = new Set([
+  'list_electerm_tabs',
+  'get_electerm_active_tab',
+  'get_electerm_terminal_selection',
+  'get_electerm_terminal_output',
+  'get_electerm_terminal_status',
+  'execute_electerm_command',
+  'get_electerm_command_rules',
+  'list_electerm_bookmarks',
+  'get_electerm_bookmark',
+  'list_electerm_bookmark_groups',
+  'electerm_sftp_list',
+  'electerm_sftp_stat',
+  'electerm_sftp_read_file',
+  'electerm_sftp_transfer_list',
+  'electerm_sftp_transfer_history',
+  'get_electerm_settings'
+])
+
 const widgetInfo = {
   name: 'MCP Server',
   description: 'Expose electerm APIs via Model Context Protocol (MCP) for AI assistants and external tools.',
@@ -94,6 +115,12 @@ const widgetInfo = {
       default: '',
       showGenerator: true,
       description: 'API key for authenticating MCP requests. Generated and remembered on first start; leave empty to keep using the saved one, or fill in your own to replace it. The server URL already carries it, so a client can be configured by pasting the copied URL.'
+    },
+    {
+      name: 'allowInteractiveTools',
+      type: 'boolean',
+      default: false,
+      description: 'Allow MCP to open and switch tabs, send input to terminals, change bookmarks and request file transfers. Leave off for read-only tools and background execution on an explicitly selected SSH tab.'
     },
     {
       name: 'enableBookmarks',
@@ -478,12 +505,17 @@ class ElectermMCPServer {
 
   // Register all tools on the MCP server
   registerTools () {
-    const server = this.mcpServer
     const self = this
+    const backgroundOnly = this.config.allowInteractiveTools !== true
+    const registerTool = (name, ...args) => {
+      if (!backgroundOnly || backgroundTools.has(name)) {
+        this.mcpServer.registerTool(name, ...args)
+      }
+    }
 
-    // ==================== Tab/Terminal APIs (always enabled) ====================
+    // ==================== Tab/Terminal APIs ====================
 
-    server.registerTool(
+    registerTool(
       'list_electerm_tabs',
       {
         description: 'List all open electerm terminal tabs',
@@ -495,7 +527,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'get_electerm_active_tab',
       {
         description: 'Get the currently active electerm tab',
@@ -507,7 +539,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'switch_electerm_tab',
       {
         description: 'Switch to a specific electerm tab',
@@ -521,7 +553,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'close_electerm_tab',
       {
         description: 'Close a specific electerm tab',
@@ -535,7 +567,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'reload_electerm_tab',
       {
         description: 'Reload/reconnect an electerm tab',
@@ -550,7 +582,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'duplicate_electerm_tab',
       {
         description: 'Duplicate an electerm tab',
@@ -564,7 +596,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'open_electerm_local_terminal',
       {
         description: 'Open a new electerm local terminal tab',
@@ -576,7 +608,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'send_electerm_terminal_command',
       {
         description: 'Send a command to the active electerm terminal. For non-interactive commands, prefer execute_electerm_command — it returns structured stdout/stderr/exitCode in one call instead of requiring send + wait + read.',
@@ -599,7 +631,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'get_electerm_terminal_selection',
       {
         description: 'Get the current text selection in electerm terminal',
@@ -614,7 +646,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'get_electerm_terminal_output',
       {
         description: 'Get recent electerm terminal output/buffer content',
@@ -631,7 +663,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'wait_for_electerm_terminal_idle',
       {
         description: 'Wait until the active terminal stops producing output, then return its content. ' +
@@ -658,7 +690,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'get_electerm_terminal_status',
       {
         description: 'Get the current status of a terminal tab. Returns whether it is actively receiving data (running), idle (no data for 4+ seconds), or has a password prompt, plus whether session keepalive is on. Also returns the last 20 lines of terminal output. This is a lightweight, non-blocking check ideal for monitoring long-running commands.',
@@ -674,7 +706,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'set_electerm_terminal_keepalive',
       {
         description: 'Turn session keepalive on or off for a terminal session. ' +
@@ -695,7 +727,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'cancel_electerm_terminal_command',
       {
         description: 'Cancel the currently running command in a terminal by sending Ctrl+C. Use this to interrupt a long-running or stuck command.',
@@ -711,18 +743,17 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'execute_electerm_command',
       {
-        description: 'Execute a non-interactive shell command and return a structured result: { stdout, stderr, exitCode, durationMs, timedOut, truncated, mode, tabId }. ' +
-          'On SSH tabs this uses a dedicated exec channel (mode="exec") with real stdout/stderr/exit code capture — no terminal buffer parsing needed. ' +
-          'On other tabs it falls back to sentinel-based PTY capture (mode="pty", stderr merged into stdout). ' +
-          'Prefer this over send_electerm_terminal_command + wait_for_electerm_terminal_idle for regular commands like git status, docker ps, npm test. ' +
-          'For interactive programs (vim, top, ssh) use the terminal send/read tools instead. ' +
-          'For long-running commands pass wait=false: runs in the background and returns an MCP task handle (poll with tasks/get, stop with tasks/cancel). Requires the MCP Tasks extension.',
+        description: backgroundOnly
+          ? 'Execute a command on an explicitly selected SSH tab using its dedicated SSH exec channel. Returns stdout, stderr and exit code. Requires tabId, mode=exec and wait=true (the defaults for mode and wait).'
+          : 'Execute a non-interactive shell command and return structured stdout, stderr and exit code. SSH uses a dedicated exec channel. Other tab types use the visible terminal (PTY). For long-running commands, pass wait=false if the client supports MCP Tasks.',
         inputSchema: {
           command: z.string().describe('The shell command to execute'),
-          tabId: z.string().optional().describe('Tab ID to run on (default: active tab)'),
+          tabId: backgroundOnly
+            ? z.string().describe('SSH tab ID from list_electerm_tabs')
+            : z.string().optional().describe('Tab ID to run on (default: active tab)'),
           timeoutMs: z.number().optional().describe('Max execution time in ms (default: 120000, max: 600000). On timeout returns partial output with timedOut=true.'),
           wait: z.boolean().optional().describe('Wait for completion and return the structured result (default: true). Set false for long-running commands to get a task handle instead.'),
           mode: z.enum(['exec', 'pty']).optional().describe('Execution mode: "exec" (default) uses the SSH exec channel with PTY fallback; "pty" forces execution in the visible terminal (for commands needing a TTY: colors, sudo prompts, TTY-aware tools). Ignored when wait=false.')
@@ -732,6 +763,13 @@ class ElectermMCPServer {
         const check = self.validateCommand(args?.command || '')
         if (!check.allowed) {
           return { content: [{ type: 'text', text: JSON.stringify({ error: check.reason }, null, 2) }], isError: true }
+        }
+
+        if (backgroundOnly && (!args.tabId?.trim() || args.mode === 'pty' || args.wait === false)) {
+          return {
+            content: [{ type: 'text', text: 'Background mode requires an SSH tab ID, mode=exec and wait=true.' }],
+            isError: true
+          }
         }
 
         // Async path: run in background, return a task handle instead of the result
@@ -780,7 +818,8 @@ class ElectermMCPServer {
               tabId: args.tabId,
               timeoutMs,
               maxOutputBytes: self.config.execMaxOutputBytes || 204800,
-              mode: args.mode
+              mode: args.mode,
+              backgroundOnly
             }
           },
           timeoutMs + 15000
@@ -793,7 +832,7 @@ class ElectermMCPServer {
     // know where the boundary is in advance — in whitelist mode a non-matching
     // command is refused outright. Registered unconditionally (never behind a
     // config switch) so it is available whenever the command tools are.
-    server.registerTool(
+    registerTool(
       'get_electerm_command_rules',
       {
         description: 'Get the command rules enforced by send_electerm_terminal_command and execute_electerm_command, so a command can be checked before it is sent. ' +
@@ -808,9 +847,9 @@ class ElectermMCPServer {
       }
     )
 
-    // ==================== Direct Tab Open APIs (always enabled) ====================
+    // ==================== Direct Tab Open APIs ====================
 
-    server.registerTool(
+    registerTool(
       'open_electerm_tab_ssh',
       {
         description: 'Open a new SSH terminal tab directly with connection parameters (no bookmark created)',
@@ -825,7 +864,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'open_electerm_tab_telnet',
       {
         description: 'Open a new Telnet terminal tab directly with connection parameters (no bookmark created)',
@@ -840,7 +879,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'open_electerm_tab_serial',
       {
         description: 'Open a new Serial terminal tab directly with connection parameters (no bookmark created)',
@@ -855,7 +894,7 @@ class ElectermMCPServer {
       }
     )
 
-    server.registerTool(
+    registerTool(
       'open_electerm_tab_local',
       {
         description: 'Open a new Local terminal tab directly with connection parameters (no bookmark created)',
@@ -872,7 +911,7 @@ class ElectermMCPServer {
 
     // ==================== Bookmark APIs ====================
     if (this.config.enableBookmarks) {
-      server.registerTool(
+      registerTool(
         'list_electerm_bookmarks',
         {
           description: 'List all electerm SSH/terminal bookmarks',
@@ -889,7 +928,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'get_electerm_bookmark',
         {
           description: 'Get a specific electerm bookmark by ID',
@@ -903,7 +942,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'add_electerm_bookmark_ssh',
         {
           description: 'Add a new SSH bookmark to electerm',
@@ -918,7 +957,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'add_electerm_bookmark_telnet',
         {
           description: 'Add a new Telnet bookmark to electerm',
@@ -933,7 +972,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'add_electerm_bookmark_serial',
         {
           description: 'Add a new Serial bookmark to electerm',
@@ -948,7 +987,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'add_electerm_bookmark_local',
         {
           description: 'Add a new Local terminal bookmark to electerm',
@@ -963,7 +1002,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'edit_electerm_bookmark',
         {
           description: 'Edit an existing electerm bookmark',
@@ -978,7 +1017,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'delete_electerm_bookmark',
         {
           description: 'Delete an electerm bookmark',
@@ -992,7 +1031,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'open_electerm_bookmark',
         {
           description: 'Open an electerm bookmark in a new tab',
@@ -1009,7 +1048,7 @@ class ElectermMCPServer {
 
     // ==================== Bookmark Group APIs ====================
     if (this.config.enableBookmarkGroups) {
-      server.registerTool(
+      registerTool(
         'list_electerm_bookmark_groups',
         {
           description: 'List all electerm bookmark groups/folders',
@@ -1021,7 +1060,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'add_electerm_bookmark_group',
         {
           description: 'Add a new electerm bookmark group',
@@ -1039,7 +1078,7 @@ class ElectermMCPServer {
 
     // ==================== SFTP APIs ====================
     if (this.config.enableSftp) {
-      server.registerTool(
+      registerTool(
         'electerm_sftp_list',
         {
           description: 'List files and folders in a remote directory on the SSH-connected tab',
@@ -1054,7 +1093,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'electerm_sftp_stat',
         {
           description: 'Get file or directory stat/info on the remote SSH server',
@@ -1069,7 +1108,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'electerm_sftp_read_file',
         {
           description: 'Read the content of a remote file on the SSH server',
@@ -1088,7 +1127,7 @@ class ElectermMCPServer {
       // a client that can call them can also read and write arbitrary local
       // paths. Opt-in, like the settings tools.
       if (this.config.enableSftpWrite) {
-        server.registerTool(
+        registerTool(
           'electerm_sftp_del_file_or_folder',
           {
             description: 'Delete a file or folder on the remote SSH server',
@@ -1103,7 +1142,7 @@ class ElectermMCPServer {
           }
         )
 
-        server.registerTool(
+        registerTool(
           'electerm_sftp_upload',
           {
             description: 'Upload a local file or folder to the remote SSH server using the SFTP transfer panel',
@@ -1124,7 +1163,7 @@ class ElectermMCPServer {
           }
         )
 
-        server.registerTool(
+        registerTool(
           'electerm_sftp_download',
           {
             description: 'Download a remote file or folder from the SSH server to a local path using the SFTP transfer panel',
@@ -1145,7 +1184,7 @@ class ElectermMCPServer {
           }
         )
 
-        server.registerTool(
+        registerTool(
           'electerm_zmodem_upload',
           {
             description: 'Upload local files to the remote SSH server using trzsz (trz) or rzsz (rz). The SSH tab must have the chosen protocol installed.',
@@ -1161,7 +1200,7 @@ class ElectermMCPServer {
           }
         )
 
-        server.registerTool(
+        registerTool(
           'electerm_zmodem_download',
           {
             description: 'Download remote files from the SSH server using trzsz (tsz) or rzsz (sz). The SSH tab must have the chosen protocol installed.',
@@ -1179,7 +1218,7 @@ class ElectermMCPServer {
         )
       }
 
-      server.registerTool(
+      registerTool(
         'electerm_sftp_transfer_list',
         {
           description: 'Get the list of all currently active/pending SFTP file transfers',
@@ -1191,7 +1230,7 @@ class ElectermMCPServer {
         }
       )
 
-      server.registerTool(
+      registerTool(
         'electerm_sftp_transfer_history',
         {
           description: 'Get the history of completed/failed SFTP file transfers',
@@ -1206,7 +1245,7 @@ class ElectermMCPServer {
 
     // ==================== Settings APIs ====================
     if (this.config.enableSettings) {
-      server.registerTool(
+      registerTool(
         'get_electerm_settings',
         {
           description: 'Get current electerm application settings',
@@ -1241,7 +1280,7 @@ class ElectermMCPServer {
     ipcMain.on('mcp-response', this.ipcHandler)
 
     // Create MCP task manager (SEP-2663) when the tasks extension is enabled
-    if (this.config.enableTasks) {
+    if (this.config.allowInteractiveTools === true && this.config.enableTasks) {
       this.taskManager = new TaskManager({
         ttl: this.config.taskTtlMs > 0 ? this.config.taskTtlMs : 3600000
       })
