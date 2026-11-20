@@ -62,6 +62,7 @@ PROXY_SERVER="socks5://127.0.0.1:1080" electerm
     .option('-P, --port <port>', 'specify ssh port')
     .option('-bo, --batch-op <batchOpFile>', 'load and run batch operation from json file')
     .option('-sp, --server-port <serverPort>', 'specify server port, default is')
+    .option('--private-clipboard', 'Use an in-memory text clipboard for this Electerm instance')
     .option('-i, --private-key-path <path>', 'specify an SSH private key path')
     .option('-ps, --passphrase <passphrase>', 'specify an SSH private key passphrase')
     .option('-pw, --password <password>', 'specify ssh server password')

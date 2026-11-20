@@ -64,11 +64,11 @@ function electronBackend () {
   // where electron does not exist at all
   const {
     Notification,
-    clipboard,
     dialog,
     safeStorage,
     shell
   } = require('electron')
+  const clipboard = require('../lib/clipboard')
   return {
     name: 'electron',
     isWebApp: false,

@@ -36,6 +36,7 @@ exports.createApp = async function () {
   const progs = initCommandLine()
   const opts = progs?.options
   globalState.set('serverPort', opts?.serverPort)
+  globalState.set('privateClipboard', opts?.privateClipboard === true)
 
   const { allowMultiInstance = false } = await getUserConfigNoEnc()
 
