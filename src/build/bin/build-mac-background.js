@@ -54,6 +54,7 @@ run('/usr/libexec/PlistBuddy', ['-c', 'Add :com.apple.security.cs.disable-librar
 fs.writeFileSync(configPath, JSON.stringify({
   ...config,
   appId: 'org.electerm.electerm.background',
+  afterPack: './src/build/bin/mac-background-build-uuid.js',
   productName,
   directories: { ...config.directories, output },
   protocols: [],
