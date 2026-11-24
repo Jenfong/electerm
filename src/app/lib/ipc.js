@@ -15,6 +15,7 @@ const {
 const globalState = require('./glob-state')
 const log = require('../common/log')
 const ipcSyncFuncs = require('./ipc-sync')
+const { setRdpPasteTarget } = require('./key-bind')
 const { dbAction, tables } = require('./db')
 const { createLoadInitData } = require('./init-data')
 // The upgrade module owns the "a brand new db has to be seeded before anyone
@@ -384,6 +385,12 @@ function initIpc () {
     checkProtocolRegistration,
     getPendingDeepLink,
     getPendingVvFile,
+    setRdpClipboardTarget: (tabId, active) => {
+      const win = globalState.get('win')
+      if (win && !win.isDestroyed()) {
+        setRdpPasteTarget(win.webContents, tabId, active)
+      }
+    },
     // macOS RDP with Control/Command swapped: the renderer sends Cmd as Ctrl,
     // but a registered app-menu accelerator (Cmd+C/V/A/Z/X) is consumed by
     // AppKit before the page sees the keydown, so those keys would never reach

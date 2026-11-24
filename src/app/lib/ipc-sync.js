@@ -111,6 +111,7 @@ module.exports = {
     return {
       sep: require('path').sep,
       ...constants,
+      privateClipboard: clipboard.usesPrivateClipboard(),
       versions: JSON.stringify(process.versions),
       transferKeys,
       fsFunctions: [

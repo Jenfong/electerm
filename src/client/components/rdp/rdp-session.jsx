@@ -99,16 +99,23 @@ export default class RdpSession extends PureComponent {
   }
 
   componentDidMount () {
+    if (window.pre?.privateClipboard) {
+      window.pre.ipcOnEvent('rdp-system-paste', this.onSystemPaste)
+    }
     this.remoteInit()
   }
 
   componentWillUnmount () {
+    if (window.pre?.privateClipboard) {
+      window.pre.ipcOffEvent('rdp-system-paste', this.onSystemPaste)
+    }
     this.cleanup()
   }
 
   cleanup = () => {
     // a closed/reloaded tab must not leave the app menu ignoring its shortcuts
     this.setMenuShortcutsIgnored(false)
+    this.setSystemPasteTarget(false)
     if (this.session) {
       try {
         this.session.shutdown()
@@ -347,6 +354,7 @@ export default class RdpSession extends PureComponent {
       })
 
       canvas.focus()
+      this.setSystemPasteTarget(document.activeElement === canvas)
 
       this.session.run().then((info) => {
         this.log(`Session ended: ${info.reason()}`, 'info')
@@ -462,23 +470,63 @@ export default class RdpSession extends PureComponent {
     )
   }
 
+  sendClipboardText = async (session, text) => {
+    const data = new window.ironRdp.ClipboardData()
+    data.addText('text/plain', text)
+    await session.onClipboardPaste(data)
+  }
+
   syncLocalToRemote = async () => {
-    if (!this.session || this.fileUploadInProgress) {
-      return
-    }
+    const { session } = this
+    if (!session || this.fileUploadInProgress) return
     try {
       const text = await readClipboardAsync()
-      if (text) {
-        const data = new window.ironRdp.ClipboardData()
-        data.addText('text/plain', text)
-        await this.session.onClipboardPaste(data)
+      if (text && this.session === session) {
+        await this.sendClipboardText(session, text)
       }
     } catch (e) {
-      this.log(`Local clipboard sync error: ${e.message}`, 'error')
+      this.log('Local clipboard sync failed', 'error')
+    }
+  }
+
+  setSystemPasteTarget = (active) => {
+    if (!isMac || !window.pre?.privateClipboard) return
+    const enabled = active && !!this.session
+    if (this.systemPasteTarget === enabled) return
+    this.systemPasteTarget = enabled
+    window.pre.runGlobalAsync('setRdpClipboardTarget', this.props.tab.id, enabled).catch(() => {})
+  }
+
+  onSystemPaste = async (_event, { tabId, text }) => {
+    const { session } = this
+    const isFocused = () => document.hasFocus() &&
+      document.activeElement === this.canvasRef.current && this.systemPasteTarget
+    if (tabId !== this.props.tab.id || !text || !session ||
+      this.fileUploadInProgress || !isFocused()) return
+
+    try {
+      await this.sendClipboardText(session, text)
+      if (this.session !== session || !isFocused()) return
+      const { DeviceEvent, InputTransaction } = window.ironRdp
+      const tx = new InputTransaction()
+      // The local Command modifier was already forwarded before we
+      // intercepted V. Release it before sending Windows Ctrl+V.
+      tx.addEvent(DeviceEvent.keyReleased(this.getScancode('MetaLeft')))
+      tx.addEvent(DeviceEvent.keyReleased(this.getScancode('MetaRight')))
+      const control = getScancode('ControlLeft')
+      const v = getScancode('KeyV')
+      tx.addEvent(DeviceEvent.keyPressed(control))
+      tx.addEvent(DeviceEvent.keyPressed(v))
+      tx.addEvent(DeviceEvent.keyReleased(v))
+      tx.addEvent(DeviceEvent.keyReleased(control))
+      session.applyInputs(tx)
+    } catch (e) {
+      this.log('RDP paste shortcut failed', 'error')
     }
   }
 
   onSessionEnd = () => {
+    this.setSystemPasteTarget(false)
     this.session = null
     this.setStatus(statusMap.error)
   }
@@ -627,11 +675,13 @@ export default class RdpSession extends PureComponent {
 
     canvas.addEventListener('focus', () => {
       this.syncMenuShortcuts()
+      this.setSystemPasteTarget(true)
       this.syncLocalToRemote()
     })
 
     canvas.addEventListener('blur', () => {
       this.syncMenuShortcuts()
+      this.setSystemPasteTarget(false)
     })
   }
 
