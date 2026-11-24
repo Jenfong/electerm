@@ -25,8 +25,9 @@ export function createFileLogger () {
 }
 
 export class FileTransferManager {
-  constructor (getSession, log, onUploadStateChange, onUploadComplete, onDownloadComplete) {
+  constructor (getSession, log, onUploadStateChange, onUploadComplete, onDownloadComplete, announceClipboard = send => send()) {
     this.getSession = getSession
+    this.announceClipboard = announceClipboard
     this.log = log
     this.uploadedFiles = new Map()
     this.pendingDownloads = new Map()
@@ -306,7 +307,7 @@ export class FileTransferManager {
       })
 
       const initiateFileCopyExt = new window.ironRdp.Extension('initiate_file_copy', fileDescriptors)
-      sess.invokeExtension(initiateFileCopyExt)
+      await this.announceClipboard(() => sess.invokeExtension(initiateFileCopyExt))
     } catch (err) {
       this.log(`Failed to initiate file copy: ${err.message}`, 'error')
       this.setUploadInProgress(false)

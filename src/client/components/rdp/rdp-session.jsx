@@ -49,6 +49,11 @@ const { Option } = Select
 // shape per context (I-beam over text, resize handles, ...).
 const ENABLE_SERVER_POINTER = false
 
+const SYSTEM_PASTE_TIMEOUT_MS = 5000
+// Windows acknowledges the format list before its applications can read it.
+const WINDOWS_CLIPBOARD_SETTLE_MS = 650
+const MAX_CLIPBOARD_ANNOUNCEMENTS = 64
+
 // remembered per host, like the resolution and scale-viewport switches
 const swapCtrlCmdLsKey = host => `rdp-swap-ctrl-cmd-${host}`
 
@@ -116,6 +121,7 @@ export default class RdpSession extends PureComponent {
     // a closed/reloaded tab must not leave the app menu ignoring its shortcuts
     this.setMenuShortcutsIgnored(false)
     this.setSystemPasteTarget(false)
+    this.clipboardAcks = null
     if (this.session) {
       try {
         this.session.shutdown()
@@ -273,6 +279,18 @@ export default class RdpSession extends PureComponent {
       builder.extension(enableCredsspExt)
       builder.extension(pointerExt)
 
+      const clipboardAcks = isMac && window.pre?.privateClipboard
+        ? { ready: false, pending: [] }
+        : null
+      this.clipboardAcks = clipboardAcks
+      if (clipboardAcks) {
+        builder.extension(new window.ironRdp.Extension('format_list_response_callback', (ok) => {
+          // Responses are ordered and carry no request ID. Track every
+          // advertisement, including automatic sync and file uploads.
+          clipboardAcks.pending.shift()?.onResponse?.(ok)
+        }))
+      }
+
       this.fileTransfer = new FileTransferManager(
         () => this.session,
         this.log,
@@ -292,7 +310,8 @@ export default class RdpSession extends PureComponent {
             ),
             duration: 0
           })
-        }
+        },
+        this.announceClipboard
       )
 
       this.fileTransfer.setStateChangeCallback((state) => {
@@ -326,7 +345,21 @@ export default class RdpSession extends PureComponent {
       })
 
       builder.forceClipboardUpdateCallback(() => {
-        this.syncLocalToRemote()
+        if (!clipboardAcks) {
+          this.syncLocalToRemote()
+          return
+        }
+        if (this.clipboardAcks !== clipboardAcks) return
+        clipboardAcks.ready = true
+        if (this.pendingSystemPaste) {
+          this.pendingSystemPaste.send?.()
+        } else if (this.session) {
+          // Complete CLIPRDR initialization without advertising stale
+          // text from another Background session.
+          this.sendClipboardText(this.session, '').catch(() => {
+            this.log('RDP clipboard initialization failed', 'error')
+          })
+        }
       })
 
       builder.setCursorStyleCallbackContext(canvas)
@@ -470,18 +503,36 @@ export default class RdpSession extends PureComponent {
     )
   }
 
-  sendClipboardText = async (session, text) => {
+  announceClipboard = async (send, onResponse) => {
+    const pending = this.clipboardAcks?.pending
+    if (pending && pending.length >= MAX_CLIPBOARD_ANNOUNCEMENTS) {
+      throw new Error('RDP clipboard response queue is full')
+    }
+    const entry = { onResponse }
+    pending?.push(entry)
+    try {
+      await send()
+    } catch (e) {
+      const index = pending?.indexOf(entry)
+      if (index >= 0) pending.splice(index, 1)
+      throw e
+    }
+  }
+
+  sendClipboardText = (session, text, onResponse) => {
     const data = new window.ironRdp.ClipboardData()
-    data.addText('text/plain', text)
-    await session.onClipboardPaste(data)
+    if (text) data.addText('text/plain', text)
+    return this.announceClipboard(() => session.onClipboardPaste(data), onResponse)
   }
 
   syncLocalToRemote = async () => {
     const { session } = this
-    if (!session || this.fileUploadInProgress) return
+    // Background text goes to Windows only on a deliberate paste, even
+    // when focusing a tab causes a clipboard update in the regular app.
+    if (!session || this.fileUploadInProgress || this.clipboardAcks) return
     try {
       const text = await readClipboardAsync()
-      if (text && this.session === session) {
+      if (text && this.session === session && !this.fileUploadInProgress) {
         await this.sendClipboardText(session, text)
       }
     } catch (e) {
@@ -492,21 +543,67 @@ export default class RdpSession extends PureComponent {
   setSystemPasteTarget = (active) => {
     if (!isMac || !window.pre?.privateClipboard) return
     const enabled = active && !!this.session
+    if (!enabled) this.clearSystemPaste()
     if (this.systemPasteTarget === enabled) return
     this.systemPasteTarget = enabled
     window.pre.runGlobalAsync('setRdpClipboardTarget', this.props.tab.id, enabled).catch(() => {})
   }
 
-  onSystemPaste = async (_event, { tabId, text }) => {
-    const { session } = this
-    const isFocused = () => document.hasFocus() &&
-      document.activeElement === this.canvasRef.current && this.systemPasteTarget
-    if (tabId !== this.props.tab.id || !text || !session ||
-      this.fileUploadInProgress || !isFocused()) return
+  isSystemPasteFocused = () => this.systemPasteTarget && document.hasFocus() &&
+    document.activeElement === this.canvasRef.current
 
+  clearSystemPaste = () => {
+    const { pendingSystemPaste } = this
+    if (!pendingSystemPaste) return
+    clearTimeout(pendingSystemPaste.timeout)
+    pendingSystemPaste.send = null
+    this.pendingSystemPaste = null
+  }
+
+  onSystemPaste = (_event, { tabId, text }) => {
+    const { session, clipboardAcks } = this
+    if (tabId !== this.props.tab.id || !text || !session || !clipboardAcks ||
+      this.fileUploadInProgress || !this.isSystemPasteFocused()) return
+
+    this.clearSystemPaste()
+    const request = {
+      send: () => {
+        request.send = null
+        if (!this.isSystemPasteFocused() || this.fileUploadInProgress || this.session !== session) {
+          this.clearSystemPaste()
+          return
+        }
+        this.sendClipboardText(session, text, (ok) => this.onSystemPasteResponse(request, session, ok))
+          .catch(() => this.finishSystemPaste(request, session, false))
+      },
+      timeout: setTimeout(() => this.finishSystemPaste(request, session, false), SYSTEM_PASTE_TIMEOUT_MS)
+    }
+    this.pendingSystemPaste = request
+    if (clipboardAcks.ready) request.send()
+  }
+
+  onSystemPasteResponse = (request, session, accepted) => {
+    if (this.pendingSystemPaste !== request) return
+    if (!accepted) {
+      this.finishSystemPaste(request, session, false)
+      return
+    }
+    clearTimeout(request.timeout)
+    request.timeout = setTimeout(
+      () => this.finishSystemPaste(request, session, true),
+      WINDOWS_CLIPBOARD_SETTLE_MS
+    )
+  }
+
+  finishSystemPaste = (request, session, accepted) => {
+    if (this.pendingSystemPaste !== request) return
+    this.clearSystemPaste()
+    if (!accepted) {
+      this.log('RDP clipboard text was not acknowledged', 'error')
+      return
+    }
+    if (this.session !== session || this.fileUploadInProgress || !this.isSystemPasteFocused()) return
     try {
-      await this.sendClipboardText(session, text)
-      if (this.session !== session || !isFocused()) return
       const { DeviceEvent, InputTransaction } = window.ironRdp
       const tx = new InputTransaction()
       // The local Command modifier was already forwarded before we
@@ -527,6 +624,7 @@ export default class RdpSession extends PureComponent {
 
   onSessionEnd = () => {
     this.setSystemPasteTarget(false)
+    this.clipboardAcks = null
     this.session = null
     this.setStatus(statusMap.error)
   }
